@@ -13,11 +13,14 @@ func _get_importer_name():
 
 func _get_visible_name():
 	match last_selected_file.get_extension().to_lower():
-		"bsp": return "Quake BSP"
+		"bsp": 
+			var bsp_version = _get_bsp_version(last_selected_file)
+			return "Binary Space Partition"
 		"wad": return "WAD Container"
+		"vpk": return "Valve Package Container (VPK)"
 
 func _get_recognized_extensions():
-	return ["bsp", "wad"]
+	return ["bsp", "wad", "vpk"]
 
 
 func _get_priority():
@@ -54,6 +57,15 @@ func _get_preset_name(preset):
 		_:
 			return "Unknown"
 
+func _get_bsp_version(file):
+	var fs = FileAccess.open(file, FileAccess.READ)
+	
+	var ident = ""
+	for i in 4: ident += char(fs.get_8())
+	if not ident.to_lower().containsn("bsp"): fs.seek(0)
+	var val = fs.get_32()
+	fs.close()
+	return val
 
 func _get_import_options(path : String, preset_index : int):
 	last_selected_file = path
@@ -69,6 +81,7 @@ func _get_import_options(path : String, preset_index : int):
 					# If it has a preset, it's a newer import file.  If not, convert the data into a preset
 					if (!import_config.has_section_key("params", "preset")):
 						bsp_preset = BSPImportPreset.new()
+						bsp_preset.vpk_source_path = import_config.get_value("params", "vpk_source_path", "")
 						bsp_preset.unit_scale = 1.0 / import_config.get_value("params", "inverse_scale_factor", 32.0)
 						bsp_preset.ignored_flags = import_config.get_value("params", "ignored_flags", PackedInt64Array())
 						bsp_preset.generate_texture_materials = import_config.get_value("params", "generate_texture_materials", true)
@@ -96,10 +109,8 @@ func _get_import_options(path : String, preset_index : int):
 						bsp_preset.use_triangle_collision = import_config.get_value("params", "use_triangle_collision", false)
 						bsp_preset.ignore_missing_entities = import_config.get_value("params", "ignore_missing_entities", false)
 						bsp_preset.post_import_script = import_config.get_value("params", "post_import_script", "")
-
 				if (!bsp_preset):
 					bsp_preset = preload("res://addons/bsp_importer/examples/preset_example.tres")
-
 				match preset_index:
 					Presets.DEFAULT:
 						return [ {
@@ -114,6 +125,10 @@ func _get_import_options(path : String, preset_index : int):
 				match preset_index:
 					Presets.DEFAULT:
 						return [{
+							"name": "vpk_source_path",
+							"default_value": ""
+						},
+						{
 							"name" : "inverse_scale_factor",
 							"default_value" : 32.0
 						},
@@ -242,23 +257,34 @@ func _get_import_options(path : String, preset_index : int):
 func _get_option_visibility(_option, _options, _unknown_dictionary):
 	return true
 
+class WADReader_Generic extends Node:
+	func read_header(source_file : String):
+		return FileAccess.get_file_as_bytes(source_file).slice(0, 4).get_string_from_ascii()
 
 func _import(source_file : String, save_path : String, options : Dictionary, r_platform_variants, r_gen_files):
 	match source_file.get_extension().to_lower():
 		"wad":
-			var reader = WADReader.new()
-			reader.read_wad(source_file)
-			reader.read_directory(source_file)
-			reader.name = source_file.get_file()
+			var reader = WADReader_Generic.new()
+			var header = reader.read_header(source_file)
+			prints("WAD Header:", header)
+			match header:
+				"WAD3":
+					reader = WADReader_GS.new()
+					reader.read_wad(source_file)
+					reader.read_directory(source_file)
+					reader.name = source_file.get_file()
+				
 			
 			var packed_scene := PackedScene.new()
 			var err := packed_scene.pack(reader)
 			if err == OK: 
-				
 				var r = ResourceSaver.save(packed_scene, "%s.%s" % [save_path, _get_save_extension()])
 				
 				reader.free()
 				return r
+			
+			
+			
 		
 		"bsp":
 			var bsp_reader := BSPReader.new()
@@ -297,6 +323,7 @@ func _import(source_file : String, save_path : String, options : Dictionary, r_p
 				bsp_reader.mesh_separation_grid_size = preset.mesh_separation_grid_size
 				bsp_reader.ignore_missing_entities = preset.ignore_missing_entities
 				bsp_reader.post_import_script_path = preset.post_import_script
+				bsp_reader.vpk_source_path = preset.vpk_source_path
 			else:
 				print("Importing BSP from import settings.")
 				bsp_reader.unit_scale = 1.0 / options.inverse_scale_factor
@@ -329,7 +356,7 @@ func _import(source_file : String, save_path : String, options : Dictionary, r_p
 				bsp_reader.mesh_separation_grid_size = options.mesh_separation_grid_size
 				bsp_reader.ignore_missing_entities = options.ignore_missing_entities
 				bsp_reader.post_import_script_path = options.post_import_script
-
+				bsp_reader.vpk_source_path = options.vpk_source_path
 			var bsp_scene := bsp_reader.read_bsp(source_file)
 			if (!bsp_scene):
 				return bsp_reader.error
@@ -345,3 +372,13 @@ func _import(source_file : String, save_path : String, options : Dictionary, r_p
 			var r = ResourceSaver.save(packed_scene, "%s.%s" % [save_path, _get_save_extension()])
 			bsp_reader.free()
 			return r
+		"vpk":
+			var packed_scene := PackedScene.new()
+			var err := packed_scene.pack(Node.new())
+			
+			if (err):
+				print("Failed to pack scene: ", err)
+				return err
+			
+			print("Saving to %s.%s" % [save_path, _get_save_extension()])
+			var r = ResourceSaver.save(packed_scene, "%s.%s" % [save_path, _get_save_extension()]) 

@@ -1,7 +1,8 @@
 extends Resource
 
 class_name BSPImportPreset
-
+## Path for Directory that stores VPK for Assets.
+@export var vpk_source_path := "" 
 ## Number of Quake units per meter
 @export var inverse_scale_factor := 32.0
 ## Flags the BSP Reader will ignore when generating geometry (Quake 2 Only)
